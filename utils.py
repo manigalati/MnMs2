@@ -41,7 +41,7 @@ def get_vendor_info(path):
 ##Data Preparation##
 ####################
 
-def get_splits(vendor_info, dict_path):
+def get_splits(dict_path):
   if not os.path.isfile(dict_path):
       splits = {"train": {"lab": {}, "ulab": {}}, "val": {}, "test": {}}
       ids = range(1, 161)
@@ -54,7 +54,7 @@ def get_splits(vendor_info, dict_path):
           pickle.dump(splits,f)
   else:
       with open(dict_path,'rb') as f:
-          splits=pickle.load(f)
+          splits = pickle.load(f)
   return splits
 
 def crop_image(image):
@@ -358,14 +358,14 @@ class ACDCPatient(torch.utils.data.Dataset):
             "data": self.data["data"]["ED"][slice_id] if not is_es else self.data["data"]["ES"][slice_id]
         }
         if self.transform_gt:
-            if "gt" in self.data:
+            if self.data["gt"] != {}:
                 sample["gt"] = self.data["gt"]["ED"][slice_id] if not is_es else self.data["gt"]["ES"][slice_id]
             if self.transform:
                 sample = self.transform(sample)
         else:
             if self.transform:
                 sample = self.transform(sample)
-            if "gt" in self.data:
+            if self.data["gt"] != {}:
                 sample["gt"] = self.data["gt"]["ED"][:,:,slice_id] if not is_es else self.data["gt"]["ES"][:,:,slice_id]
         return sample
 
@@ -401,14 +401,14 @@ class ACDCPatientPhase(torch.utils.data.Dataset):
             "data": self.data["data"][self.phase][slice_id]
         }
         if self.transform_gt:
-            if "gt" in self.data:
+            if self.data["gt"] != {}:
                 sample["gt"] = self.data["gt"][self.phase][slice_id]
             if self.transform:
                 sample = self.transform(sample)
         else:
             if self.transform:
                 sample = self.transform(sample)
-            if "gt" in self.data:
+            if self.data["gt"] != {}:
                 sample["gt"] = self.data["gt"][self.phase][:,:,slice_id]
         return sample
 
@@ -561,7 +561,7 @@ class Validator:
                 if pseudo_hd < self.get_thrs(domain_id, phase, "RV_hd")[1]:
                     self.best_predictions[domain_id][patient_id][phase]["ensemble"] = prediction[phase]
 
-    def domain_evaluation(self, domain_id, model, loader, checkpoint, reconstructor=None):
+    def domain_evaluation(self, domain_id, model, loader, checkpoint=None, reconstructor=None):
         for patient in loader:
             if reconstructor is None:
                 if domain_id not in self.metrics: self.metrics[domain_id] = {}
@@ -785,77 +785,33 @@ def load_models(solutions):
             models[axis][model_id] = model
     return models
 
-def infer_predictions(solutions, models, test_loader, patient_info, inference_folder):
-    for model_id, model in models.items():
-        output_folder = os.path.join(inference_folder, "{:03d}".format(model_id))
-        if not os.path.isdir(output_folder):
-            os.makedirs(output_folder)
-        
-        model.eval()
-        results, pseudo_results = {"ED": {}, "ES": {}}, {"ED": {}, "ES": {}}
-        for patient in test_loader:
-            patient_id = patient.dataset.id
-            if model_id not in solutions[patient_id]["ED"] and epoch not in solutions[patient_id]["ES"]:
-                continue 
-            gt, prediction = [], []
-            for iter, batch in enumerate(patient):
-                batch = {
-                    "data": batch["data"].to(device),
-                    "gt": batch["gt"].to(device)
-                }
-                with torch.no_grad():
-                    batch["prediction"] = model.forward(batch["data"])[0]
-                
-                gt = torch.cat([gt, batch["gt"]], dim=0) if len(gt)>0 else batch["gt"]
-                prediction = torch.cat([prediction, batch["prediction"]], dim=0) if len(prediction)>0 else batch["prediction"]
-            gt = {"ED": gt[:len(gt)//2].cpu().numpy(), "ES": gt[len(gt)//2:].cpu().numpy()}
-            prediction = {"ED": prediction[:len(prediction)//2].cpu().numpy(),"ES": prediction[len(prediction)//2:].cpu().numpy()}
-            np.save(
-              os.path.join(output_folder,f"{patient_id}.npy"),
-              {"gt": gt, "prediction": prediction}
-            )
-
-def infer_predictions(test_loader, validator, patient_info, inference_folder):
+def infer_predictions(inference_folder, test_loader, model=None, validator=None):
     if not os.path.isdir(inference_folder):
         os.makedirs(inference_folder)
-    results, pseudo_results = {"ED": {}, "ES": {}}, {"ED": {}, "ES": {}}
     for patient in test_loader:
         patient_id = patient.dataset.id
-        gt = []
+        gt, prediction = [], []
         for iter, batch in enumerate(patient):
-            batch = {"gt": batch["gt"].to(device)}
-            gt = torch.cat([gt, batch["gt"]], dim=0) if len(gt)>0 else batch["gt"]   
+            batch = {
+                "data": batch["data"].to(device),
+                "gt": batch["gt"].to(device)
+            }
+            gt = torch.cat([gt, batch["gt"]], dim=0) if len(gt)>0 else batch["gt"]
+            if model is not None:
+                with torch.no_grad():
+                    batch["prediction"] = model.forward(batch["data"])[0]
+                prediction = torch.cat([prediction, batch["prediction"]], dim=0) if len(prediction)>0 else batch["prediction"]
         gt = {"ED": gt[:len(gt)//2].cpu().numpy(), "ES": gt[len(gt)//2:].cpu().numpy()}
-        prediction = validator.get_best_prediction("test", patient_id)
+        if len(prediction) != 0:
+            prediction = {"ED": prediction[:len(prediction)//2].cpu().numpy(),"ES": prediction[len(prediction)//2:].cpu().numpy()}
+        else:
+            prediction = validator.get_best_prediction("test", patient_id)
         for phase in ["ED", "ES"]:
             np.save(
                 os.path.join(inference_folder, f"{patient_id}_{phase}.npy"),
                 {"gt": gt[phase], "prediction": prediction[phase]}
             )
-
-def assemble_predictions(solutions, inference_folder):
-    output_folder = os.path.join(inference_folder, "predictions")
-    if not os.path.isdir(output_folder):
-        os.makedirs(output_folder)
-    for patient_id, solution in solutions.items():
-        for phase in solution:
-            gt = np.load(
-                os.path.join(inference_folder, "{:03d}".format(solution[phase][0]), f"{patient_id}.npy"),
-                allow_pickle=True
-            ).item()["gt"][phase]
-
-            prediction = np.stack([
-                np.load(
-                    os.path.join(inference_folder, "{:03d}".format(model_id), f"{patient_id}.npy"),
-                    allow_pickle=True
-                ).item()["prediction"][phase]
-            for model_id in solution[phase]])
-            prediction = np.mean(prediction, axis=0)
-            
-            np.save(
-                os.path.join(output_folder, f"{patient_id}_{phase}.npy"),
-                {"gt": gt, "prediction": prediction}
-            )
+    return
 
 def postprocess_image(image,info,phase,current_spacing):
     postprocessed = np.zeros(info["shape_{}".format(phase)])
@@ -891,7 +847,9 @@ def evaluate_metrics(prediction, reference):
             results["HD" + key] = np.inf
     return results
 
-def postprocess_predictions(inference_folder, patient_info, current_spacing):
+def postprocess_predictions(inference_folder, patient_info, current_spacing, output_folder):
+    if not os.path.isdir(output_folder):
+        os.makedirs(output_folder)
     results = {"ED":{}, "ES":{}}
     for prediction_file in os.listdir(inference_folder):
         patient_id = "_".join(prediction_file.split("_")[:-1])
@@ -902,6 +860,10 @@ def postprocess_predictions(inference_folder, patient_info, current_spacing):
         gt = gt.transpose(1,2,0)
         prediction = postprocess_image(prediction, patient_info[patient_id], phase, current_spacing)
         results[phase][patient_id] = evaluate_metrics(prediction, gt)
+        nib.save(
+            nib.Nifti1Image(prediction, patient_info[patient_id]["affine"], patient_info[patient_id]["header"]),
+            os.path.join(output_folder, "{}_{}.nii.gz".format(patient_id, phase))
+        )
     return results
 
 def display_results(results):
@@ -932,3 +894,68 @@ def display_results(results):
 ############################
 #Semi-Supervised Refinement#
 ############################
+
+def optimize_segmentation(loader, model, ae=None, epoch=None, best_prediction=None):
+    for batch in loader:
+        model.optimizer.zero_grad()
+        batch["data"] = batch["data"].to(device)
+        batch["output"] = model.forward(batch["data"])
+        if ae is None:
+            batch["gt"] = [y.to(device) for y in batch["gt"]]
+            loss = sum([
+                w * model.Loss(x, y)
+                for w,x,y in zip(model.weights, batch["output"], batch["gt"]) if w!=0
+            ])
+        else:
+            batch["output"] = batch["output"][0]
+            batch["pseudo_gt"] = ae.forward(batch["output"])
+            batch["pseudo_gt"] = torch.mean(torch.stack([
+                epoch/EPOCHS * torch.tensor(best_prediction, requires_grad=False).to(device),
+                (1 - epoch/EPOCHS) * batch["pseudo_gt"]
+            ]),dim=0)
+            batch["pseudo_gt"] = torch.nn.functional.one_hot(torch.argmax(batch["pseudo_gt"], dim=1), num_classes=4).permute(0,3,1,2).float()
+            loss = model.Loss(batch["output"], batch["pseudo_gt"], onlyRV=True)
+        loss.backward()
+        nn.utils.clip_grad_norm_(model.parameters(), 12)
+        model.optimizer.step()
+    model.adjust_learning_rate()
+    return
+
+def semisupervised_refinement(model, ae, epochs, train_loader, val_loader, ulab_loader, validator, checkpoint):
+    model.eval()
+    with torch.no_grad():
+        validator.domain_evaluation("val", model, val_loader, checkpoint)
+    epoch_end(validator.get_summary("val"))
+
+    for epoch in epochs:
+        model.train()
+        optimize_segmentation(train_loader, model)
+
+        model.eval()
+        with torch.no_grad():
+            validator.domain_evaluation("val", model, val_loader, checkpoint)
+            validator.domain_evaluation("ulab", model, ulab_loader, reconstructor=ae)
+        anomalies = validator.get_anomalies("ulab")
+        num_anomalies = len(anomalies["ED"]) + len(anomalies["ES"])
+        epoch_end({**validator.get_summary("val"), "#anom": num_anomalies}, f"{epoch} - supervised training")
+        if num_anomalies == 0: break
+
+        model.train()
+        for phase in ["ED", "ES"]:
+            for patient_id in anomalies[phase]:
+                unlabelled_patient = torch.utils.data.DataLoader(
+                    ACDCPatientPhase(ulab_loader.root_dir, patient_id, phase, transform=transform_downsample),
+                    batch_size=BATCH_SIZE, shuffle=False, num_workers=0
+                )
+                optimize_segmentation(unlabelled_patient, model, ae, epoch, best_prediction=validator.get_best_prediction("ulab", patient_id)[phase])
+
+        model.eval()
+        with torch.no_grad():
+            validator.domain_evaluation("val", model, val_loader, checkpoint)
+            validator.domain_evaluation("ulab", model, ulab_loader, reconstructor=ae)
+        anomalies = validator.get_anomalies("ulab")
+        num_anomalies = len(anomalies["ED"]) + len(anomalies["ES"])
+        epoch_end({**validator.get_summary("val"), "#anom": num_anomalies}, f"{epoch} - semisupervised refinement")
+        if epoch % 10 == 0: save_checkpoint("{:03d}".format(epoch), model)
+        if num_anomalies == 0: break
+    return
