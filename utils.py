@@ -9,10 +9,20 @@ from skimage.transform import resize
 from batchgenerators.augmentations.utils import resize_segmentation
 from batchgenerators.augmentations.spatial_transformations import augment_spatial
 import torch
+import torchvision
 import torch.nn as nn
+import matplotlib.pyplot as plt
 from medpy.metric import binary
-from copy import deepcopy
-import torch.nn.functional as F
+
+#################
+####CONSTANTS####
+#################
+
+BATCH_SIZE = 20
+
+EPOCHS = 250
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 ####################
 #Data Visualization#
@@ -264,6 +274,33 @@ class Downsample():
             sample['gt'] = self.downsample_seg_for_ds_transform2(sample['gt'])
         return sample
 
+transform = torchvision.transforms.Compose([
+    AddPadding((256,256)),
+    CenterCrop((256,256)),
+    OneHot(),
+    ToTensor()
+])
+transform_augmentation = torchvision.transforms.Compose([
+    MirrorTransform(),
+    SpatialTransform(patch_size=(256,256), angle_x=(-np.pi/6,np.pi/6), scale=(0.7,1.4), random_crop=True),
+    OneHot(),
+    ToTensor()
+])
+transform_downsample = torchvision.transforms.Compose([
+    AddPadding((256,256)),
+    CenterCrop((256,256)),
+    Downsample(),
+    OneHot(),
+    ToTensor()
+])
+transform_augmentation_downsample = torchvision.transforms.Compose([
+    MirrorTransform(),
+    SpatialTransform(patch_size=(256,256), angle_x=(-np.pi/6,np.pi/6), scale=(0.7,1.4), random_crop=True),
+    Downsample(),
+    OneHot(),
+    ToTensor()
+])
+
 class ACDCDataLoader():
     def __init__(self, root_dir, batch_size, transform=None, transform_gt=True):
         self.root_dir = root_dir
@@ -435,7 +472,7 @@ class Validator:
             prediction = torch.cat([prediction, batch["output"]], dim=0) if len(prediction)>0 else batch["output"]
 
             batch["pgt"] = reconstructor(batch["output"])
-            batch["pgt"] = torch.nn.functional.one_hot(
+            batch["pgt"] = nn.functional.one_hot(
                 torch.argmax(batch["pgt"], dim=1), num_classes=4
             ).permute(0,3,1,2).float()
             pgt = torch.cat([pgt, batch["pgt"]], dim=0) if len(pgt)>0 else batch["pgt"]
@@ -471,7 +508,7 @@ class Validator:
                 }
             for k, v in epoch_metrics.items(): metrics[patient_id][phase][k].append(v)
 
-    def update_best_models(self, domain_id, model):
+    def update_best_models(self, domain_id, model, checkpoint):
         if domain_id not in self.best_models: 
             self.best_models[domain_id] = [np.inf]
         value = self.get_summary(domain_id)["Total"]
@@ -480,8 +517,8 @@ class Validator:
             self.best_models[domain_id] = sorted(self.best_models[domain_id])[:self.m_best]
             index = self.best_models[domain_id].index(value)
             for model_id in range(index + 1, self.m_best)[::-1]:
-                save_checkpoint.rename("best_{:03d}".format(model_id - 1), "best_{:03d}".format(model_id))
-            save_checkpoint("best_{:03d}".format(index), model)
+                checkpoint.rename("best_{:03d}".format(model_id - 1), "best_{:03d}".format(model_id))
+            checkpoint("best_{:03d}".format(index), model)
     
     def get_distribution(self, domain_id, phase, measure):
         if domain_id in self.metrics:
@@ -524,7 +561,7 @@ class Validator:
                 if pseudo_hd < self.get_thrs(domain_id, phase, "RV_hd")[1]:
                     self.best_predictions[domain_id][patient_id][phase]["ensemble"] = prediction[phase]
 
-    def domain_evaluation(self, domain_id, model, loader, reconstructor=None):
+    def domain_evaluation(self, domain_id, model, loader, checkpoint, reconstructor=None):
         for patient in loader:
             if reconstructor is None:
                 if domain_id not in self.metrics: self.metrics[domain_id] = {}
@@ -536,7 +573,7 @@ class Validator:
                 self.patient_evaluation(patient.dataset.id, model, prediction, pgt, self.pseudo_metrics[domain_id])
                 self.update_best_predictions(domain_id, patient.dataset.id, prediction, self.pseudo_metrics[domain_id][patient.dataset.id])
         if reconstructor is None:
-            self.update_best_models(domain_id, model)
+            self.update_best_models(domain_id, model, checkpoint)
     
     def get_history(self, domain_id):
         random_patient = list(self.metrics[domain_id].keys())[0]
@@ -605,10 +642,10 @@ class Checkpointer():
             os.path.join(self.ckpt_folder, ckpt_name)
         )
 
-def supervised_training(model, epochs, train_loader, val_loader, validator):    
+def supervised_training(model, epochs, train_loader, val_loader, validator, checkpoint):    
     model.eval()
     with torch.no_grad():
-        validator.domain_evaluation("val", model, val_loader)
+        validator.domain_evaluation("val", model, val_loader, checkpoint)
     epoch_end(validator.get_summary("val"))
 
     for epoch in epochs:
@@ -629,9 +666,9 @@ def supervised_training(model, epochs, train_loader, val_loader, validator):
         
         model.eval()
         with torch.no_grad():
-            validator.domain_evaluation("val", model, val_loader)
+            validator.domain_evaluation("val", model, val_loader, checkpoint)
         epoch_end(validator.get_summary("val"), epoch)
-        if epoch % 10 == 0: save_checkpoint("{:03d}".format(epoch), model)
+        if epoch % 10 == 0: checkpoint("{:03d}".format(epoch), model)
     return
 
 def plot_history(history):

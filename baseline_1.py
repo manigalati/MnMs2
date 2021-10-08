@@ -1,3 +1,5 @@
+from utils import Baseline
+
 class Baseline_1(Baseline):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
