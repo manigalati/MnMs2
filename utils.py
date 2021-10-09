@@ -22,6 +22,8 @@ BATCH_SIZE = 20
 
 EPOCHS = 250
 
+CKPT = "checkpoints/"
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 ####################
