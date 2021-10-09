@@ -86,8 +86,8 @@ def generate_patient_info(vendor_info, dict_path):
       patient_info[id]["shape_ES"] = image_ES.shape
       patient_info[id]["crop_ED"] = crop_image(image_ED)
       patient_info[id]["crop_ES"] = crop_image(image_ES)
-  with open(dict_path,'wb') as f:
-      pickle.dump(patient_info,f)
+  with open(dict_path, 'wb') as f:
+      pickle.dump(patient_info, f)
   return patient_info
 
 def preprocess_image(id, image,crop, is_seg, spacing, spacing_target):
@@ -520,7 +520,7 @@ class Validator:
             index = self.best_models[domain_id].index(value)
             for model_id in range(index + 1, self.m_best)[::-1]:
                 checkpoint.rename("best_{:03d}".format(model_id - 1), "best_{:03d}".format(model_id))
-            checkpoint("best_{:03d}".format(index), model)
+            checkpoint("best_{:03d}".format(index), model, self)
     
     def get_distribution(self, domain_id, phase, measure):
         if domain_id in self.metrics:
@@ -633,8 +633,12 @@ class Checkpointer():
         if not dst.endswith(".pth"): dst += ".pth"
         if os.path.isfile(os.path.join(self.ckpt_folder, src)):
             os.rename(os.path.join(self.ckpt_folder, src), os.path.join(self.ckpt_folder, dst))
+            os.rename(
+                os.path.join(self.ckpt_folder, src.replace(".pth", "_val.pkl")),
+                os.path.join(self.ckpt_folder, dst.replace(".pth", "_val.pkl"))
+            )
     
-    def __call__(self, ckpt_name, model):
+    def __call__(self, ckpt_name, model, validator):
         if not ckpt_name.endswith(".pth"): ckpt_name += ".pth"
         torch.save(
             {
@@ -643,6 +647,9 @@ class Checkpointer():
             }, 
             os.path.join(self.ckpt_folder, ckpt_name)
         )
+        with open(os.path.join(self.ckpt_folder, ckpt_name.replace(".pth", "_val.pkl")), 'wb') as f:
+            pickle.dump(validator, f)
+
 
 def supervised_training(model, epochs, train_loader, val_loader, validator, checkpoint):    
     model.eval()
@@ -670,7 +677,7 @@ def supervised_training(model, epochs, train_loader, val_loader, validator, chec
         with torch.no_grad():
             validator.domain_evaluation("val", model, val_loader, checkpoint)
         epoch_end(validator.get_summary("val"), epoch)
-        if epoch % 10 == 0: checkpoint("{:03d}".format(epoch), model)
+        if epoch % 10 == 0: checkpoint("{:03d}".format(epoch), model, validator)
     return
 
 def plot_history(history):
@@ -726,7 +733,7 @@ def DC(prediction, target):
     try: return binary.dc(prediction, target)
     except Exception: return 0
 
-def HD(prediction,mtarget):
+def HD(prediction, target):
     try: return binary.hd(prediction, target)
     except Exception: return np.inf
 
@@ -958,6 +965,6 @@ def semisupervised_refinement(model, ae, epochs, train_loader, val_loader, ulab_
         anomalies = validator.get_anomalies("ulab")
         num_anomalies = len(anomalies["ED"]) + len(anomalies["ES"])
         epoch_end({**validator.get_summary("val"), "#anom": num_anomalies}, f"{epoch} - semisupervised refinement")
-        if epoch % 10 == 0: save_checkpoint("{:03d}".format(epoch), model)
+        if epoch % 10 == 0: save_checkpoint("{:03d}".format(epoch), model, validator)
         if num_anomalies == 0: break
     return
