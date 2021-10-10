@@ -52,10 +52,10 @@ def get_splits(dict_path):
         splits["train"]["ulab"] = list(range(161,201))
         splits["val"] = ids[int(len(ids)*0.7) : int(len(ids)*0.85)]
         splits["test"] = ids[int(len(ids)*0.85):]
-        with open(dict_path,'wb') as f:
+        with open(dict_path, "wb") as f:
             pickle.dump(splits,f)
     else:
-        with open(dict_path,'rb') as f:
+        with open(dict_path, "rb") as f:
             splits = pickle.load(f)
     return splits
 
