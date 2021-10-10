@@ -965,6 +965,6 @@ def semisupervised_refinement(model, ae, epochs, train_loader, val_loader, ulab_
         anomalies = validator.get_anomalies("ulab")
         num_anomalies = len(anomalies["ED"]) + len(anomalies["ES"])
         epoch_end({**validator.get_summary("val"), "#anom": num_anomalies}, f"{epoch} - semisupervised refinement")
-        if epoch % 10 == 0: save_checkpoint("{:03d}".format(epoch), model, validator)
+        if epoch % 10 == 0: checkpoint("{:03d}".format(epoch), model, validator)
         if num_anomalies == 0: break
     return
