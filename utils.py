@@ -44,20 +44,20 @@ def get_vendor_info(path):
 ####################
 
 def get_splits(dict_path):
-  if not os.path.isfile(dict_path):
-      splits = {"train": {"lab": {}, "ulab": {}}, "val": {}, "test": {}}
-      ids = range(1, 161)
-      ids = random.sample(ids, len(ids))
-      splits["train"]["lab"] = ids[:int(len(ids)*0.7)]
-      splits["train"]["ulab"] = list(range(161,201))
-      splits["val"] = ids[int(len(ids)*0.7) : int(len(ids)*0.85)]
-      splits["test"] = ids[int(len(ids)*0.85):]
-      with open(dict_path,'wb') as f:
-          pickle.dump(splits,f)
-  else:
-      with open(dict_path,'rb') as f:
-          splits = pickle.load(f)
-  return splits
+    if not os.path.isfile(dict_path):
+        splits = {"train": {"lab": {}, "ulab": {}}, "val": {}, "test": {}}
+        ids = range(1, 161)
+        ids = random.sample(ids, len(ids))
+        splits["train"]["lab"] = ids[:int(len(ids)*0.7)]
+        splits["train"]["ulab"] = list(range(161,201))
+        splits["val"] = ids[int(len(ids)*0.7) : int(len(ids)*0.85)]
+        splits["test"] = ids[int(len(ids)*0.85):]
+        with open(dict_path,'wb') as f:
+            pickle.dump(splits,f)
+    else:
+        with open(dict_path,'rb') as f:
+            splits = pickle.load(f)
+    return splits
 
 def crop_image(image):
     nonzero_mask = binary_fill_holes(image != 0)
@@ -68,27 +68,27 @@ def crop_image(image):
     return resizer
   
 def generate_patient_info(vendor_info, dict_path):
-  patient_info = {}
-  for id in vendor_info["SUBJECT_CODE"]:
-      patient_info[id] = vendor_info[vendor_info["SUBJECT_CODE"] == id].to_dict()
-      patient_info[id] = {k: list(v.values())[0] for k,v in patient_info[id].items()}
-      
-      image_path = patient_info[id]["PATH"]
-      image = nib.load(image_path.format("CINE"))
-      patient_info[id]["spacing"] = image.header["pixdim"][[3,2,1]]
-      patient_info[id]["header"] = image.header
-      patient_info[id]["affine"] = image.affine
+    patient_info = {}
+    for id in vendor_info["SUBJECT_CODE"]:
+        patient_info[id] = vendor_info[vendor_info["SUBJECT_CODE"] == id].to_dict()
+        patient_info[id] = {k: list(v.values())[0] for k,v in patient_info[id].items()}
 
-      image_ED = nib.load(image_path.format("ED")).get_fdata()
-      image_ES = nib.load(image_path.format("ES")).get_fdata()
+        image_path = patient_info[id]["PATH"]
+        image = nib.load(image_path.format("CINE"))
+        patient_info[id]["spacing"] = image.header["pixdim"][[3,2,1]]
+        patient_info[id]["header"] = image.header
+        patient_info[id]["affine"] = image.affine
 
-      patient_info[id]["shape_ED"] = image_ED.shape
-      patient_info[id]["shape_ES"] = image_ES.shape
-      patient_info[id]["crop_ED"] = crop_image(image_ED)
-      patient_info[id]["crop_ES"] = crop_image(image_ES)
-  with open(dict_path, 'wb') as f:
-      pickle.dump(patient_info, f)
-  return patient_info
+        image_ED = nib.load(image_path.format("ED")).get_fdata()
+        image_ES = nib.load(image_path.format("ES")).get_fdata()
+
+        patient_info[id]["shape_ED"] = image_ED.shape
+        patient_info[id]["shape_ES"] = image_ES.shape
+        patient_info[id]["crop_ED"] = crop_image(image_ED)
+        patient_info[id]["crop_ES"] = crop_image(image_ES)
+    with open(dict_path, 'wb') as f:
+        pickle.dump(patient_info, f)
+    return patient_info
 
 def preprocess_image(id, image,crop, is_seg, spacing, spacing_target):
     image = image[crop].transpose(2,1,0)
