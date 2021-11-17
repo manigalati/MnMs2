@@ -48,10 +48,10 @@ def get_splits(dict_path):
         splits = {"train": {"lab": {}, "ulab": {}}, "val": {}, "test": {}}
         ids = range(1, 161)
         ids = random.sample(ids, len(ids))
-        splits["train"]["lab"] = ids[:int(len(ids)*0.7)]
+        splits["train"]["lab"] = ids[:int(len(ids)*0.8)]
         splits["train"]["ulab"] = list(range(161,201))
-        splits["val"] = ids[int(len(ids)*0.7) : int(len(ids)*0.85)]
-        splits["test"] = ids[int(len(ids)*0.85):]
+        splits["val"] = ids[int(len(ids)*0.8) :]
+        splits["test"] = splits["val"]
         with open(dict_path, "wb") as f:
             pickle.dump(splits,f)
     else:
@@ -794,31 +794,46 @@ def load_models(solutions):
             models[axis][model_id] = model
     return models
 
-def infer_predictions(inference_folder, test_loader, model=None, validator=None):
+def infer_predictions(inference_folder, test_loader, model=None, validator=None, ae=None):
     if not os.path.isdir(inference_folder):
         os.makedirs(inference_folder)
     for patient in test_loader:
         patient_id = patient.dataset.id
-        gt, prediction = [], []
+        gt, prediction, reconstruction = [], [], []
         for iter, batch in enumerate(patient):
             batch = {
                 "data": batch["data"].to(device),
-                "gt": batch["gt"].to(device)
+                **({"gt": batch["gt"].to(device)} if "gt" in batch else {})
             }
-            gt = torch.cat([gt, batch["gt"]], dim=0) if len(gt)>0 else batch["gt"]
+            if "gt" in batch:
+                gt = torch.cat([gt, batch["gt"]], dim=0) if len(gt)>0 else batch["gt"]
             if model is not None:
                 with torch.no_grad():
                     batch["prediction"] = model.forward(batch["data"])[0]
                 prediction = torch.cat([prediction, batch["prediction"]], dim=0) if len(prediction)>0 else batch["prediction"]
-        gt = {"ED": gt[:len(gt)//2].cpu().numpy(), "ES": gt[len(gt)//2:].cpu().numpy()}
+            if ae is not None:
+                with torch.no_grad():
+                    batch["reconstruction"] = ae.forward(batch["prediction"])
+                reconstruction = torch.cat([reconstruction, batch["reconstruction"]], dim=0) if len(reconstruction)>0 else batch["reconstruction"]
+        if len(gt) != 0:
+            gt = {"ED": gt[:len(gt)//2].cpu().numpy(), "ES": gt[len(gt)//2:].cpu().numpy()}
+        
         if len(prediction) != 0:
             prediction = {"ED": prediction[:len(prediction)//2].cpu().numpy(),"ES": prediction[len(prediction)//2:].cpu().numpy()}
         else:
             prediction = validator.get_best_prediction("test", patient_id)
+        
+        if len(reconstruction) != 0:
+            reconstruction = {"ED": reconstruction[:len(reconstruction)//2].cpu().numpy(), "ES": reconstruction[len(reconstruction)//2:].cpu().numpy()}
+        
         for phase in ["ED", "ES"]:
             np.save(
                 os.path.join(inference_folder, f"{patient_id}_{phase}.npy"),
-                {"gt": gt[phase], "prediction": prediction[phase]}
+                {
+                    **({"gt": gt[phase]} if len(gt) != 0 else {}),
+                    "prediction": prediction[phase],
+                    **({"reconstruction": reconstruction[phase]} if len(reconstruction) != 0 else {}),
+                }
             )
     return
 
@@ -864,15 +879,27 @@ def postprocess_predictions(inference_folder, patient_info, current_spacing, out
         patient_id = "_".join(prediction_file.split("_")[:-1])
         phase = prediction_file.split("_")[-1].replace(".npy", "")
         prediction_file = np.load(os.path.join(inference_folder, prediction_file), allow_pickle=True).item()
-        gt = prediction_file["gt"]
+        
         prediction = prediction_file["prediction"]
-        gt = gt.transpose(1,2,0)
         prediction = postprocess_image(prediction, patient_info[patient_id], phase, current_spacing)
-        results[phase][patient_id] = evaluate_metrics(prediction, gt)
         nib.save(
             nib.Nifti1Image(prediction, patient_info[patient_id]["affine"], patient_info[patient_id]["header"]),
             os.path.join(output_folder, "{}_{}.nii.gz".format(patient_id, phase))
         )
+
+        if "gt" in prediction_file:
+            gt = prediction_file["gt"]
+            gt = gt.transpose(1,2,0)
+            results[phase][patient_id] = evaluate_metrics(prediction, gt)
+        
+        if "reconstruction" in prediction_file:
+            reconstruction = prediction_file["reconstruction"]
+            reconstruction = postprocess_image(reconstruction, patient_info[patient_id], phase, current_spacing)
+            nib.save(
+                nib.Nifti1Image(reconstruction, patient_info[patient_id]["affine"], patient_info[patient_id]["header"]),
+                os.path.join(output_folder, "{}_{}_AE.nii.gz".format(patient_id, phase))
+            )
+
     return results
 
 def display_results(results):
