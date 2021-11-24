@@ -854,7 +854,7 @@ def postprocess_image(image,info,phase,current_spacing):
 
 def evaluate_metrics(prediction, reference):
     results = {}
-    for c,key in enumerate(["_RV"],start=1):#4->2
+    for c,key in enumerate(["_RV"],start=3):#4->2
         ref = np.copy(reference)
         pred = np.copy(prediction)
 
