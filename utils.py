@@ -306,7 +306,7 @@ transform_augmentation_downsample = torchvision.transforms.Compose([
 class ACDCDataLoader():
     def __init__(self, root_dir, batch_size, transform=None, transform_gt=True):
         self.root_dir = root_dir
-        self.patient_ids = [file.split(".npy")[0] for file in os.listdir(root_dir)]
+        self.patient_ids = sorted([file.split(".npy")[0] for file in os.listdir(root_dir)])
         self.batch_size = batch_size
         self.patient_loaders = []
         for id in self.patient_ids:
@@ -339,6 +339,34 @@ class ACDCDataLoader():
 
     def current_id(self):
         return self.patient_ids[self.counter_id]
+
+class ACDCDataLoaders():
+    def __init__(self, root_dirs, batch_size, transform=None, transform_gt=True, shuffle=False):
+        self.dataloaders = [
+            ACDCDataLoader(dir, batch_size = BATCH_SIZE, transform=transform) for dir in  root_dirs
+        ]
+        #self.map = [j for i,loader in enumerate(self.dataloaders) for j in [i]*len(loader)]
+        max_length = max([len(dataloader) for dataloader in self.dataloaders])
+        init_map = [i for i, loader in enumerate(self.dataloaders) if len(loader)==max_length]
+        self.map = init_map + list(range(init_map[-1]+1, len(self.dataloaders)))
+        self.map += list(range(len(self.dataloaders))) * (max_length - 2)
+        self.map += list(range(init_map[-1]+1))
+        if shuffle:
+            self.map = random.sample(self.map, len(self.map))
+
+    def __len__(self):
+        return len(self.map)
+
+    def __getitem__(self, id):
+        loader_id = self.map[id]
+        patient_id = self.dataloaders[loader_id].counter_id#id - self.map.index(loader_id)
+        if patient_id == 0:
+            self.dataloaders[loader_id].__iter__()
+        return self.dataloaders[loader_id].__next__()
+
+    def set_transform(self, transform):
+        for loader in self.dataloaders:
+            loader.set_transform(transform)
 
 class ACDCPatient(torch.utils.data.Dataset):
     def __init__(self, root_dir, patient_id, transform=None, transform_gt=True):
